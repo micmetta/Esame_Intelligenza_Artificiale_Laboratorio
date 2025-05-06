@@ -1,0 +1,5 @@
+(load 0_Main.clp)
+(load 1_Env.clp)
+(load mappa1-senza-fatti-iniziali.clp)
+(load 3_Agent.clp)
+(reset)

@@ -1,0 +1,811 @@
+#inizializzazione del modulo di reinforcement learning con i parametri associati 
+rl -s learning on # enable RL
+
+#indifferent-selection -g # use epsilon-greedy decision making
+#indifferent-selection -e 0.2 # 20% deviation from greedy
+
+indifferent-selection -b # Boltzmann decision making
+indifferent-selection -t 1 # temperature value (default 25)
+
+
+
+# inizializzazione dell'ambiente in cui il nostro agente si muoverà, assoceremo un operatore o allo stato s e questo operatore è initialize-angent-env 
+sp {propose*initialize 
+    (state <s> ^superstate nil -^name) #stato iniziale
+-->
+    (<s> ^operator <o> +) # specifico che un operatore può essere applicato nello stato <s>
+    (<o> ^name initialize-agent-env) # setto il nome dell'operatore <o> definito sopra
+}
+
+# posizione possibile per gli oggetti: 5, 1, 2, 3, 4
+# il nostro env sarà un esape room in cui il nostro agente si muoverà.
+# il nostro agente avrà un nome, potrà avere al massimo 2 oggetti contemporaneamente, 
+# potrà combinare queste oggetti tramite una strategia, potrà avere diverse strategie di lancio
+# e potrà posizionarsi in modo diverso nella stanza.
+# All'inizio è in position 1 ma può essere in altre posizooni come indicato prima
+sp {apply*initialize
+    (state <s> ^operator <o>) # verifico che nello stato <s> in cui mi trovo posso applicare un operatore <o>
+    (<o> ^name initialize-agent-env) # verifico il nome dell'operatore 
+-->
+    (<s> ^name escape_room # specifico il nome del nuovo stato <s> corrente nel quale mi trovo
+         ^has_agent <agent> # specifico che questo stato avrà un attributo <agent> che rappresente l'agente con diversi attributi 
+		            # (settati sotto)
+         ^has_env <env>
+         ^has_total_round 1) # dico che il numero totale di round in questo momento è 1
+    
+    (<agent> ^name Frank # nome agente
+             ^has_object nil # oggetto 1 che ha in mano l'agente
+             ^has_object nil # oggetto 2 che ha in mano l'agente (l'agente potrebbe anche decidere di non prendere un secondo oggetto)
+
+             ^combining_strategy <s1> <s2> <s3> <s4> <s5> <s6> # setto come attributi dell'agente, 6 possibili strategie per combinare i 3 oggetti
+             ^throwing_strategy <t1> <t2> <t3> <t4> <t5> <t6> # setto come attributi dell'agente, 6 strategie di posizionamento tra le quali l'agente potrà scegliere per decidere da dove lanciare gli strumenti che ha combinato
+             ^position_strategy <p1> <p2> # settiamo come attributi i punti nei quali l'agente potrà colpire la finestra
+
+             ^throwing_strategy_selected nil
+             ^position_strategy_selected nil
+             ^combining_strategy_selected nil # all'inizio ovviamente la strategia di combinazione degli strumenti selezionata sarà nil
+
+             ^is_in_position 1 # L'AGENTE inizialmente SI TROVA IN POSIZIONE 1
+             ^action start)       # start, observe, plan-tool, plan-position, plan-throwing, execute-take, execute-what-position, "execute-fire", "define-update", ("finish" o "start")
+				  # (imposto che l'azione eseguibile adesso sarà quella di start)
+
+
+    # Specifichiamo abbiamo 3 tipi di oggetti diversi combinabili in 6 maniere diverse come  segue. 
+    # Ogni combinazione ha un reward differente(preferiamo spring (la molla)-stick
+
+    (<s1> ^name tool1 ^print_command spring-stick   ^has_object spring  ^has_object stick       ^reward   1) # combinazione preferita
+													     # che ha name=="tool1"
+    (<s2> ^name tool2 ^print_command rocks-stick    ^has_object rocks   ^has_object stick       ^reward  -1)               
+    (<s3> ^name tool3 ^print_command rocks-spring   ^has_object rocks   ^has_object spring      ^reward  -1)               
+    (<s4> ^name tool4 ^print_command stick          ^has_object stick   ^has_object nil         ^reward  -1.1)               
+    (<s5> ^name tool5 ^print_command rocks          ^has_object rocks   ^has_object nil         ^reward  -1.1)               
+    (<s6> ^name tool6 ^print_command spring         ^has_object spring  ^has_object nil         ^reward  -1.1)               
+
+    # Strategie di posizionamento (con i relativi rewards) dalle quali l'agente potrà lanciare gli strumenti:
+    (<t1> ^name on_trunks   ^print_command trunks   ^reward 1)
+    (<t2> ^name 4           ^print_command center   ^reward -0.5)   # CENTER
+    (<t3> ^name 5           ^print_command nord     ^reward -0.5)   # NORD
+    (<t4> ^name 1           ^print_command sud      ^reward -2)     # SUD
+    (<t5> ^name 2           ^print_command est      ^reward -1)     # EST
+    (<t6> ^name 3           ^print_command ovest    ^reward -1)     # OVEST
+    
+    # calcolo score del danno inflitto alla finestra: (5 * strategia_combinazione_oggetti + 5 * posizione_dalla_quale_agente_lancia + 10 * punto_finestra_da_colpire)
+    # calcolo score del danno inflitto alla finestra: (5 * combine + 5 * throwing + 10 * position)
+    
+    # DEFINIAMO i rewards assegnati ai punti nei quali la finestra potrà essere colpita:
+    (<p1> ^name border  ^reward 1)      # BORDER
+    (<p2> ^name center  ^reward -1)     # CENTER
+
+    # damage score:     (5 * combine + 5 * throwing + 10 * position)
+
+
+    # DEFINIAMO DOVE SI TROVA LA FINESTRA E DOVE SI TROVANO GLI OGGETTI CHE L'AGENTE RACCOGLIE E COMBINA
+    # 1 SUD, 2 EST, 3 OVEST, 4 CENTRO, 5 NORD
+    (<env>      ^has_object <window> <obj1> <obj2> <obj3> <obj4>) # settiamo che l'env ha come attributi la finestra e i 4 oggetti 
+	 							  # che l'agente può utilizzare
+    (<window>   ^has_life_points 60 ^is_in_position 5 ^name window) # settiamo i punti-vita della finestra e diciamo che essa si trova in
+								    # direzione 5 (NORD)
+
+    (<obj1> ^name spring    ^is_in_position 2) # la molla è in posizione 2 (EST)
+    (<obj2> ^name rocks     ^is_in_position 2) # le pietre in posizione 2 (EST)
+    (<obj3> ^name stick     ^is_in_position 3) # il bastoncino è in posizione 3 (OVEST)
+    (<obj4> ^name trunks    ^is_in_position 4) # i 2 tronchi d'albero si trovano in posizione 4 (CENTRO)
+    
+
+    (write (crlf) |EVENTO ------------------------------------------------------ INIZIALIZZAZIONE ESCAPE ROOM|)
+    (write (crlf))
+    (write (crlf) |---------------- POSIZIONE 1 è SUD -------------------|)
+    (write (crlf) |---------------- PosiZIONE 2 è EST -------------------|)
+    (write (crlf) |---------------- POSIZIONE 3 è OVEST -----------------|)
+    (write (crlf) |---------------- POSIZIONE 4 è CENTER ----------------|)
+    (write (crlf) |---------------- POSIZIONE 5 è NORD ------------------|)
+    (write (crlf))
+    (write (crlf) |EVENTO ------------------------------------------------------ fINE INIZIALIZZAZIONE|)
+    (write (crlf))
+}
+
+
+
+# SI PROPONE L'OPERATORE OBSERVE, CHE FA SI CHE L'AGENTE PRENDA COSCIENZA DI COSA HA INTORNO:
+sp { propose*agent*observe 
+    (state <s>  ^name escape_room  # verifico che lo stato in cui si trova l'agente abbia questo nome
+                ^has_agent <agent>) # verifico che questo stato abbia l'attributo <agent>
+
+    (<agent> ^action start) # verifico che il valore dell'attribito "action" di <agent> sia "start"
+-->
+    (<s> ^operator <o>) # specifico che in questo stato è applicabile l'operatore <o>
+    (<o> ^name observe_operator) # setto il nome di questo operatore a "observe_operator"
+}
+
+# Regola che mi permette di poter applicare l'operatore "observe_operator" definito alla fine della regola di sopra
+sp { apply*agent*observe
+    (state <s>  ^name escape_room
+                ^operator <o>
+                ^has_agent <agent>)
+
+    (<o> ^name observe_operator) # verifico che l'operatore "observe_operator" sia applicabile nello stato in cui mi trovo
+    (<agent>    ^name <name>)
+-->
+    (<agent> ^action start - observe +)
+    (write (crlf) |EVENTO ------------------------------------------------------ AgentE | <name> | STA OSSERVANDO LA STANZA|)
+}
+
+
+
+### L'agente cerca e individua oggetti nella stanza ###
+sp { lookup*agent*room
+    (state <s>  ^name escape_room
+                ^has_agent <agent>
+                ^has_env <env>
+                ^has_total_round <round>)
+
+    (<agent>    ^action observe
+                ^is_in_position <pos_agent>) # prendo la posizione in cui si trova l'agente in questo momento e lo salvo in <pos_agent>
+
+    (<env>      ^has_object <window> <obj1> <obj2> <obj3> <obj4>)
+    (<window>   ^name window ^has_life_points <points> ^is_in_position <pos_window>) # prendo la posizione della finestra e me la salvo
+    
+    # prendo le posizioni nelle quali si trovano gli oggetti e me le salvo in variabili di supporto:
+    (<obj1>     ^name spring ^is_in_position <pos_spring>)
+    (<obj2>     ^name rocks ^is_in_position <pos_rocks>)
+    (<obj3>     ^name stick ^is_in_position <pos_stick>)
+    (<obj4>     ^name trunks ^is_in_position <pos_trunks>)
+-->
+    (write (crlf) |EVENTO ------------------------------------------------------ ROUND ATTUALE: | <round>) # stampo il round corrente (1)
+    (write (crlf))
+    (write (crlf) |Window LIFE POINTS: | <points>)
+    (write (crlf) |The Agent is in position: | <pos_agent>)
+    (write (crlf) |The Agent knows there is a window in position: | <pos_window>)
+    (write (crlf) |The Agent knows there is a spring in position: | <pos_spring>)
+    (write (crlf) |The Agent knows there are some rocks in position: | <pos_rocks>)
+    (write (crlf) |The Agent knows there is a stick in position: | <pos_stick>)
+    (write (crlf) |The Agent knows there are some truncks in position: | <pos_trunks>)
+    (write (crlf))
+}
+#FINE OSSERVAZIONE
+
+
+
+
+#--------------------------------------------------------------------------------------------------
+### Cosa pianifica l'agente quando ha osservato la stanza?
+#  PIANIFICA LA COSTRUZIONE DI UNO STRUMENTO CHE L'AGENTE POTRA' UTILIZZARE PER ROMPERE LA FINESTRA
+#--------------------------------------------------------------------------------------------------
+
+# Regola che propone un operatore che servirà per costruire uno strumento
+sp {propose*plan-tool
+    (state <s>  ^name escape_room
+                ^has_agent <agent>)
+    (<agent>    ^action observe)   
+-->
+    (<s> ^operator <o>)
+    (<o> ^name plan-tool_operator) # setto il nome dell'operatore che permetterà di avviare la costruzione di uno strumento
+}
+
+
+# Regola che applica la costruzione di uno strumento (ovviamente la regola sarà applicata solo se l'antecedente sarà rispettato)
+sp {apply*plan-tool
+
+    (state <s>  ^name escape_room
+                ^has_agent <agent>
+                ^operator <o>)
+                
+    (<o> ^name plan-tool_operator)
+    (<agent>    ^action observe # verifica che l'azione che può eseguire è "observe"
+                ^name <name>)  
+-->
+    (<agent> ^action observe - plan-tool +) # tolgo l'azione "observe" (ormai completata) e setto come prossima azione da eseguire
+				            # la plan-tool
+    (write (crlf) |EVENTO ------------------------------------------------------ Agente | <name> | STA PIANIFICANDO LA SUA PROSSIMA MOSSA|)
+    (write (crlf))
+}
+
+
+
+#--------------------------------------------------------------------------------------------------
+# 
+#COMBINAZIONE DEGLI OGGETTI: SI CONTOLLA PRIMA LO STATO DELL'AGENTE E POI SCEGLIE UNA STRATEGIA DI COMBINAZIONE 
+#--------------------------------------------------------------------------------------------------
+
+# Regola che propone di eseguire una strategia di combinazione degli strumenti
+sp {propose*combining*strategy
+
+    (state <s>  ^name escape_room
+                ^has_agent <agent>)
+
+    (<agent>    ^action plan-tool
+                ^combining_strategy <strategy>) # mi prendo il valore della strategia di combinazione degli strumenti e me la salvo 
+						# nella variabile "strategy" (la prima volta strategy == tool1)
+
+    (<strategy> ^name <name> # prendo il nome della strategia corrente e me lo salvo nella variabile "name"
+                ^print_command <print>)
+-->
+    (<s>    ^operator <o>) # dico che nello stato corrente è applicabile un nuovo operatore
+    (<o>    ^name strategy_operator # il nome di questo operatore è "strategy_operator"
+            ^strategy_name <name> # setto l'attributo "strategy_name" di <o> proprio con il nome della <strategy> catturata 						  # nell'antecedente
+            ^print_command <print>) # stampo "(strategy_operator)"
+}
+
+# FINO A *1 SI SETTA COSA PREMIARE NEL REINFORCEMENT  E COME VEDIAMO con la regola di sotto assegnamo il reward più alto alla 
+# strategia chiamata "SPRING-STICK" 
+# set reward time 0
+sp {agent*rl*strategy-tool1*SPRING-STICK
+
+    (state <s>  ^name escape_room
+                ^operator <op> +) # verifichiamo che sia stato proposto un certo operatore <o>
+    (<op>       ^name strategy_operator
+                ^strategy_name tool1) # verifico che il nome della strategia considerata in questo momento sia "tool1"
+-->
+    (<s> ^operator <op> = 1) # premio con il valore +1 la strategia "tool1" (sarebbe la "SPRING-STICK")
+}
+
+sp {agent*rl*strategy-tool2*ROCKS-STICK 
+
+    (state <s>  ^name escape_room
+                ^operator <op> +) # verifichiamo che sia stato proposto un certo operatore <o>
+    (<op>       ^name strategy_operator
+                ^strategy_name tool2) # verifico che il nome della strategia considerata in questo momento sia "tool2"
+-->
+    (<s> ^operator <op> = 0) # premio con il valore 0 la strategia "tool2" (sarebbe la "rocks-stick")
+}
+
+sp {agent*rl*strategy-tool3*ROCKS-SPRING
+
+    (state <s>  ^name escape_room
+                ^operator <op> +) # verifichiamo che sia stato proposto un certo operatore <o>
+    (<op>       ^name strategy_operator
+                ^strategy_name tool3) # verifico che il nome della strategia considerata in questo momento sia "tool3"
+-->
+    (<s> ^operator <op> = 0) # premio con il valore 0 la strategia "tool3"
+}
+
+
+sp {agent*rl*strategy-tool4*STICK
+
+    (state <s>  ^name escape_room
+                ^operator <op> +) # verifichiamo che sia stato proposto un certo operatore <o>
+    (<op>       ^name strategy_operator
+                ^strategy_name tool4) # verifico che il nome della strategia considerata in questo momento sia "tool5"
+-->
+    (<s> ^operator <op> = 0) # premio con il valore 0 la strategia "tool4"
+}
+
+
+sp {agent*rl*strategy-tool5*ROCKS
+
+    (state <s>  ^name escape_room
+                ^operator <op> +) # verifichiamo che sia stato proposto un certo operatore <o>
+    (<op>       ^name strategy_operator
+                ^strategy_name tool5) # verifico che il nome della strategia considerata in questo momento sia "tool5"
+-->
+    (<s> ^operator <op> = 0) # premio con il valore 0 la strategia "tool5"
+}
+
+
+sp {agent*rl*strategy-tool6*SPRING
+
+    (state <s>  ^name escape_room
+                ^operator <op> +) # verifichiamo che sia stato proposto un certo operatore <o>
+    (<op>       ^name strategy_operator
+                ^strategy_name tool6) # verifico che il nome della strategia considerata in questo momento sia "tool5"
+-->
+    (<s> ^operator <op> = 0) # premio con il valore 0 la strategia "tool6"
+}
+
+
+# CON LA REGOLA QUI SOTTO SI FA L'APPLY DELLA COMBINAZIONE CHE L'AGENTE HA SCELTO:
+sp {apply*combining*strategy
+    (state <s>  ^name escape_room
+                ^has_agent <agent>
+                ^operator <op>)
+    
+    (<op>       ^name strategy_operator
+                ^strategy_name <new_strategy> # PRENDO IL NOME DELLA STRATEGIA CHE HA SCELTO L'AGENTE precedentemente e me la salvo nella 
+					      # variabile new_strategy
+                ^print_command <print>)
+
+    (<agent>    ^combining_strategy_selected <old_strategy>
+                ^action <action>
+                ^name <name>)
+
+-->
+    (<agent> ^action <action> - plan-position +) # aggiorno l'azione successiva (stato successivo) che l'agente dovrà eseguire che sarà "
+    (<agent> ^combining_strategy_selected <old_strategy> - <new_strategy> +) # aggiorno la strategia scelta dall'agente (all'inizio "tool1")
+     
+    # Stampo la strategia di combinazione degli strumenti scelta dall'agente:
+    (write (crlf) |EVENTO                                                        Agente | <name> | sceglie di combinare | <print> | (|<new_strategy>|)|)
+    (write (crlf))
+}
+
+# DIAMO ALL'AGENTE IL REWARD CHE ABBIAMO SETTATO PRIMA RISPETTO ALLA SCELTA CHE HA COMPIUTO:
+sp {elaborate*combining*reward
+    (state <s>  ^name escape_room
+                ^reward-link <r> # con r prendo l'attributo r-link dello stato <s> corrente nel quale si trova l'agente
+                ^has_agent <agent>)
+
+    (<agent>    ^combining_strategy_selected <strategy_name> # prendo il nome della strategia scelta dall'agente (all'inizio sarà "tool1")
+                ^combining_strategy <strategy>) # prendo la strategia di combinazione di strumenti che l'agente ha scelto 
+						# nelle regole precedenti (all'inizio sarà "tool1")
+
+    (<strategy> ^name <strategy_name> # prendo il nome della strategia di combinazione di strumenti con <strategy_name>
+                ^reward <s-reward>) # con <s-reward> prendo il valore del campo "reward" della strategia di combinazione di strumento che l'agente ha scelto e me lo salvo nella var <s-reward>
+-->
+   (<r> ^reward <rr>) # con rr prendo l'attributo di <r> che conterrà il valore di reward da assegnare
+   (<rr> ^value <s-reward>) # setto il reward al valore "s-reward"
+}
+
+
+
+# DOPO LA COMBINAZIONE DEI TOOL L'AGENTE DEVE SCEGLIERE LA STRATEGIA PER LANCIARE QUELLO CHE HA IN MANO ALLA FINESTRA QUINDI COME PRIMA PROPOSTA, 
+# SETTIAMO COSA PREMIARE CON IL REINFORCMENT LEARNING ALL'INIZIO E SETTIAMO CHE IL PREMIO PER ON_TRUNKS PARTE DA 5 QUINDI SARA' PREMIATO MOLTO DI PIU'
+
+# CON LA REGOLA DI SOTTO VIENE PROPOSTO UN OPERATORE che rappresenterà la strategia di posizionamento che l'agente potrà selezionare
+# dalla quale potrà lanciare gli oggetti contro la finestra:
+sp {propose*throwing*strategy
+    (state <s>  ^name escape_room
+                ^has_agent <agent>) # con <agent> mi posso collegare agli attributi dell'agente
+
+    (<agent>    ^action plan-position # dico che la prossima azione che dovrà esegure l'agente sarà chiamata "plan-position"
+				      # perchè con questa azione sceglierà il punto sul quale posizionarsi per provare a lanciare
+				      # gli oggetti contro la finestra
+                ^throwing_strategy <strategy>) # prendo il nome della la strategia di posizionamento 
+					       # (che la prima volta sarà <strategy> == "on_trunks")
+					       # e me lo salvo dentro la variabile <strategy>
+    (<strategy> ^name <name> ^print_command <position>) # prendo il nome della strategia che verrà stampata 
+							# (all'inizio sarà "on_trunks") e il valore da stampare ("all'inizio sarà "trunks") 
+-->
+    (<s>    ^operator <o>) # assegno allo stato s corrente un nuovo operatore <o> che avrà le caratteristiche descritte sotto
+    (<o>    ^name throwing_strategy_operator # setto il nome del nuovo operatore <o>
+            ^strategy_name <name> # setto il nome della strategia di posizionamento (all'inizio sarà "on_trunks")
+            ^print_command <position>) # mi memorizzo il nome della combinazione di oggetti da lanciare ("all'inizio sarà "trunks")
+}
+
+
+
+#######################################################################################################################################
+# CON LE REGOLE QUI SOTTO ASSEGNIAMO UN REWARDS DIFFERENTE ALLE DIVERSE POSIZIONI NELLE QUALI L'AGENTE POTRA' POSIZIONARSI 
+# PER LANCIARE GLI OGGETTI PRESI NELLA FASE PRECEDENTE CONTRO LA FINESTRA:
+# (ALL'INIZIO quindi a tempo 0 !) 
+
+# Con la regola di sotto setto il reward per il posizionamento "on_trunks" (ovvero sui tronchi d'albero):
+sp {agent*rl*strategy-on_trunks
+
+    (state <s>  ^name escape_room
+                ^operator <op> +) # verifico che sia stato proposto un operatore
+    (<op>       ^name throwing_strategy_operator # verifico che il nome dell'operatore proposto sia proprio "throwing_strategy_operator"
+                ^strategy_name on_trunks) # verifico che il nome della strategia di posizionamento sia "on_trunks" 
+-->
+    (<s> ^operator <op> = 5) # setto il reward di questa strategia di posizionamento a 5
+}
+
+
+sp {agent*rl*strategy-on-CENTER
+
+    (state <s>  ^name escape_room
+                ^operator <op> +)
+    (<op>       ^name throwing_strategy_operator
+                ^strategy_name 4) # setto il reward di questa strategia di posizionamento a 4
+-->
+    (<s> ^operator <op> = 0)
+}
+
+sp {agent*rl*strategy-on-SUD
+
+    (state <s>  ^name escape_room
+                ^operator <op> +)
+    (<op>       ^name throwing_strategy_operator
+                ^strategy_name 1) # setto il reward di questa strategia di posizionamento a 1
+-->
+    (<s> ^operator <op> = 0)
+}
+
+sp {agent*rl*strategy-on-OVEST
+
+    (state <s>  ^name escape_room
+                ^operator <op> +)
+    (<op>       ^name throwing_strategy_operator
+                ^strategy_name 3) # setto il reward di questa strategia di posizionamento a 3
+--> 
+    (<s> ^operator <op> = 0)
+}
+
+
+sp {agent*rl*strategy-on-EST
+
+    (state <s>  ^name escape_room
+                ^operator <op> +)
+    (<op>       ^name throwing_strategy_operator
+                ^strategy_name 2) # setto il reward di questa strategia di posizionamento a 2
+-->
+    (<s> ^operator <op> = 0)
+}
+
+
+sp {agent*rl*strategy-on-NORD
+
+    (state <s>  ^name escape_room
+                ^operator <op> +)
+    (<op>       ^name throwing_strategy_operator
+                ^strategy_name 5) # setto il reward di questa strategia di posizionamento a 5
+-->
+    (<s> ^operator <op> = 0)
+}
+#######################################################################################################################################
+
+
+
+# DOPODICHE'VIENE SCELTA UNA STRATEGIA DI LANCIO:
+sp {apply*throwing*strategy
+    (state <s>  ^name escape_room
+                ^has_agent <agent>
+                ^operator <op>)
+    
+    (<op>       ^name throwing_strategy_operator
+                ^strategy_name <new_strategy> # prendo il nome della strategia di posizionamento scelta
+                ^print_command <position>) # prendo il valore della strategia di posizionamento scelta che verrà stampato nel conseguente
+
+    (<agent>    ^throwing_strategy_selected <old_strategy>
+                ^action plan-position
+                ^name <name>)
+
+-->
+    (<agent> ^throwing_strategy_selected <old_strategy> - <new_strategy> +) # sostituisco la strategia di posizionamento
+								            # vecchia con l'ultima strategia di posizionamento scelta
+    (<agent> ^action plan-position - plan-throwing +) # aggiorno la nuova tipologia di azione che l'agente dovrà eseguire che
+						      # è chiamata "plan-throwing" nella quale l'agente deciderà quale parte della 
+						      # finestra dovrà colpire
+
+    (write (crlf) |EVENTO ------------------------------------------------------ Agente | <name> | sceglie di lanciare dalla posizione: | <position>)
+    (write (crlf))
+}
+
+
+
+# UNA VOLTA CHE LA STRATEGIA DI LANCIO E' SCELTA, VERRA' ASSEGNATO IL RISPETTIVO REWARD: 
+sp {elaborate*throwing*reward
+    (state <s>  ^name escape_room
+                ^reward-link <r>
+                ^has_agent <agent>)
+
+    (<agent>    ^throwing_strategy_selected <strategy_name>
+                ^action plan-position
+                ^throwing_strategy <strategy>)        
+
+    (<strategy> ^name <strategy_name>
+                ^reward <s-reward>)
+-->
+   (<r> ^reward <rr>)
+   (<rr> ^value <s-reward>)
+}
+
+
+
+#-----------------------------------------------------------------------------------------------------------------
+# QUI SI SELEZIONA LA PARTE DELLA FINESTRA DA COLPIRE. 
+# PRIMA C'E' LA REGOLA DI PROPOSE e 
+# POI VERRA' SETTATO COME DEVE COMPORTARSI L'ALGORITMO DI REINFORCMENT LEARNING con i reaward settati al tempo 0
+#-----------------------------------------------------------------------------------------------------------------
+
+sp {propose*position-throwing-strategy
+    (state <s>  ^name escape_room
+                ^has_agent <agent>)
+
+    (<agent>    ^action plan-throwing
+                ^position_strategy <strategy>) # prendo l'info su quale punto della finestra colpire
+
+    (<strategy> ^name <name>) # prendo il nome del punto della finestra da colpire
+-->
+    (<s>    ^operator <o>) # propongo un nuovo operatore <o>
+    (<o>    ^name position_strategy_operator # il nome di <o> sarà "position_strategy_operator"
+            ^strategy_name <name>) # setto il nome del punto della finestra da colpire ("border" o "center")
+}
+
+
+
+#######################################################################################################################################
+# CON LE REGOLE QUI SOTTO ASSEGNIAMO UN REWARDS DIFFERENTE ALLE DIVERSE POSIZIONI NELLE QUALI L'AGENTE POTRA' COLPIRE LA FINESTRA 
+# - Questi che vengono qui sotto sono i rewards iniziali, quindi quelli a tempo 0.
+#   Poichè entrambi sono settati a 0, questo vuol dire che L'AGENTE ALL'INIZIO NON SAPRA' ASSOLUTAMENTE NULLA SU QUALE SIA LA POSIZIONE MIGLIORE 
+#   NEL QUALE COLPIRE LA FINESTRA, ma durante l'apprendimento per rinforzo riuscirà a capirlo tramite le ricompense successive che riceverà.
+sp {agent*rl*strategy*fire*on*BORDER
+    (state <s>  ^name escape_room
+                ^operator <op> +)
+    (<op>       ^name position_strategy_operator
+                ^strategy_name border) # nome del punto della finestra da colpire (che potrebbe essere scelto)
+-->
+    (<s> ^operator <op> = 0)
+}
+
+
+sp {agent*rl*strategy*fire*on*CENTER
+    (state <s>  ^name escape_room
+                ^operator <op> +)
+    (<op>       ^name position_strategy_operator
+                ^strategy_name center) # nome del punto della finestra da colpire (che potrebbe essere scelto)
+-->
+    (<s> ^operator <op> = 0)
+}
+#######################################################################################################################################
+
+
+# DOPODICHE'VIENE SCELTA UNA POSIZIONE NELLA QUALE COLPIRE LA FINESTRA:
+sp {apply*position-throwing-strategy
+    (state <s>  ^name escape_room
+                ^has_agent <agent>
+                ^operator <op>)
+    (<op>       ^name position_strategy_operator
+                ^strategy_name <new_strategy>) # prendo il nome del punto della finestra da colpire 
+    (<agent>    ^position_strategy_selected <old_strategy> ^name <name> ^action <action>)
+
+-->
+    (<agent> ^position_strategy_selected <old_strategy> - <new_strategy> +) # aggiorno il punto della finestra da colpire che è stato selezionato
+    (<agent> ^action <action> - execute-take +) # aggiorno la nuova fase nella quale entrerà l'agente (NELLA QUALE L'AGENTE PRENDERA' L'OGGETTO/GLI OGGETTI PRESENTI NELLA POSIZIONE IN CUI SI TROVA)
+    (write (crlf) |EVENTO ------------------------------------------------------ Agente | <name> | sceglie di colpire | <new_strategy> | della finestra|)
+    (write (crlf))
+}
+
+
+# UNA VOLTA SCELTA LA POSIZIONE RISPETTO ALLA QUALE COLPIRE LA FINESTRA, ASSEGNAMO IL RISPETTIVO REWARD:
+sp {elaborate*position*reward
+    (state <s>  ^name escape_room
+                ^reward-link <r>
+                ^has_agent <agent>)
+
+    (<agent>    ^position_strategy_selected <strategy_name>
+                ^position_strategy <strategy>)        
+
+    (<strategy> ^name <strategy_name>
+                ^reward <s-reward>)
+-->
+   (<r> ^reward <rr>)
+   (<rr> ^value <s-reward>)
+}
+
+
+# L'AGENTE PER FARE QUELLO CHE ABBIAMO DEFINITO PRIMA DEVE AVERE ALMENO 2 OGGETTI IN MANO,
+# QUINDI LA REGOLA DI SOTTO SERVE PER PROPORRE DI RACCOGLIERE GLI OGGETI CHE PUO' TROVARE NELLA POSIZIONE IN CUI
+# SI TROVA IN QUESTO MOMENTO:
+sp {propose*execute-take-objects
+    (state <s>  ^name escape_room
+                ^has_agent <agent>)
+
+    (<agent>    ^action execute-take) # mi assicuro di trovarmi nella fase NELLA QUALE L'AGENTE PRENDERA' L'OGGETTO/GLI OGGETTI PRESENTI NELLA POSIZIONE IN CUI SI TROVA
+-->
+    (<s> ^operator <o>)
+    (<o> ^name take_objects_operator) # il nome dell'operatore proposto nello stato <s> sarà "take_objects_operator"
+}
+
+
+# QUI SI APPLICA L'OPERATORE PROPOSTO (con la regola precedente),
+# DICENDO ALL'AGENTE DI RACCOGLIERE CIO CHE C'E' NELLA SUA POSIZIONE E AGGIORNANDO il fatto CHE
+# adesso avrà QUALCOSA IN MANO:
+sp {apply*execute-take-objects
+
+    (state <s>  ^name escape_room
+                ^operator <o>
+                ^has_agent <agent>
+                ^has_env <env>)
+
+    (<o> ^name take_objects_operator) # mi assicuro di trovarmi nella fase "take_objects_operator"
+    
+    (<agent> ^name <name>
+             ^action <action>
+             ^is_in_position <pos_agent> # prendo la posizione nella quale si trova l'agente e me lo salvo in <pos_agent>
+             ^combining_strategy_selected <strategy_name> # memorizzo in <strategy_name> il nome della combinazione di strumenti che l'agente ha deciso di utilizzare
+             ^combining_strategy <s1>) # seleziono con <s1> la combinazione di strumenti che l'agente ha scelto
+
+    (<s1> ^name <strategy_name> ^has_object  <c1>) # vado a considerare esattamente la combinazione di strumenti che ha il nome della strategia di combinazione degli strumenti scelta dall'agente precedentemente
+						   # e con <c1> mi prendo il nome del primo strumento della strategia <s1> (ad es. se s1==tool1 allora c1==spring perchè s1 ha come primo has_object==spring e 
+						   # come secondo has_object==stick) (alcune strategia hanno solo un campo 'has_object con un valore mentre l'altro è nil)
+    
+    (<env> ^has_object <ob1>) # prendo il valore del campo has_object di env e lo memorizzo in <obj>
+					
+    						  # (es: <obj1> ^name spring ^is_in_position 2)
+    (<ob1>  ^name <c1> ^is_in_position <pos_obj>) # con <pos_obj> prendo la posizione nella quale si trova lo strumento <c1>
+    
+-->
+    (<agent> ^is_in_position <pos_agent> - <pos_obj> +) # specifico che l'agente adesso si sposta in posizione <pos_obj> (che è quella dove si trova l'oggetto che andrà a raccogliere)
+    (<agent> ^action <action> - execute-what-position +) # specifico che adesso la nuova azione sarà quella chiamata "execute-what-position"
+    (<agent> ^has_object <c1>) # specifico che adesso l'agente ha in mano l'oggetto <c1>
+
+    (write (crlf) )
+    (write (crlf) |INFO                                                         Agente | <name> |si muove nella posizione | <pos_obj>)
+    (write (crlf) |                                                             Agente | <name> | racooglie un/una | <c1>)
+    (write (crlf) (crlf))
+}
+
+
+# Adesso che l'agente ha raccolto un oggetto,
+# se ne ha solamente uno in mano, PUO' DECIDERE DI SPOSTARSI nuovamente PER RACCOGLIERE UN SECONDO OGGETTO (sempre tramite la regola di sopra)
+# oppure PUO' DECIDERE DI AVVICINARSI ALLA FINESTRA, QUINDI PROPONGO L'OPERATORE GO-ON-POSITION.
+sp {propose*go-on-position
+    (state <s>  ^name escape_room
+                ^has_agent <agent>)
+    (<agent>    ^action execute-what-position) # verifico che la nuova azione sarà quella chiamata "execute-what-position"
+-->
+    (<s> ^operator <o>) # dico che nello stato <s> verrà proposto un nuovo oepratore
+    (<o> ^name execute_what_position_operator) # il nome di questo nuovo operatore sarà "execute_what_position_operator"
+}
+
+
+# Quando verrà eseguita la regola qui sotto, l'agente si posizionerà nella posizione 
+# scelta predentemente in modo tale da poter lanciare gli oggetti contro la finestra:
+sp {apply*go-on-position
+    (state <s>  ^name escape_room
+                ^has_agent <agent>
+                ^operator <o>)
+
+    (<agent>    ^name <name>
+                ^action execute-what-position
+                ^is_in_position <pos_agent> # mi prendo la posizione nella quale si trova in questo momento l'agente
+                ^throwing_strategy_selected <strategy>) # mi prendo la strategia di posizionamento scelta dall'agente in uno degli stati precedenti
+
+    (<o> ^name execute_what_position_operator) # verifico che sia stato proposto l'operatore chiamato "execute_what_position_operator"
+-->
+    (<agent> ^action execute-what-position - execute-fire +) # aggiorno la prossima azione da fire che sarà chiamata "execute-fire"
+    (<agent> ^is_in_position <pos_agent> - <strategy> +) # aggiornamento posizione agente (l'agente si sposterà nella posizione dalla quale ha scelto di lanciare)
+    
+    (write (crlf) )
+    (write (crlf) |INFO                                                         Agente | <name> | cerca di lanciare dalla posizione: | <strategy>)
+    (write (crlf) (crlf))
+}
+
+
+# PROPOSE OPERATORE PER CIò CHE HA IN MANO LANCIARE ALLA FINESTRA
+# Con la regola di sotto viene proposto l'operatore "fire_operator":
+sp {propose*fire*on*window
+    (state <s>  ^name escape_room
+                ^has_agent <agent>)
+    (<agent>    ^action execute-fire) # verifico che l'azione che l'agente può eseguire sia "execute-fire"
+-->
+    (<s> ^operator <o>) # propongo un nuovo operatore
+    (<o> ^name fire_operator) # il nome dell'operatore proposto sarà "fire_operator"
+}
+
+
+# POSSO LANCIARE SOLO SE HO TUTTE LE STRATEGIE AVVALORATE E POI 
+# LANCIANDO CALCOLO IL DANNO CHE FACCIO ALLA FINESTRA UTILIZZANDO I REWARD CHE HO CON LE MIE SCELTE 
+
+sp {apply*fire*on*window
+    (state <s>  ^name escape_room
+                ^has_env <env>
+                ^has_agent <agent>
+                ^operator <o>)
+
+    (<o> ^name fire_operator) # verifico che sia stato proposto l'operatore "fire_operator"
+    (<env> ^has_object <window>)
+    (<window>   ^name window ^has_life_points <points>) # con <points> prendo i punti vita della finestra
+
+    (<agent>    ^action <action>
+                ^position_strategy_selected {<p> <> nil} # verifico che l'agente abbia selezionato in quale posizione colpire la finestra
+                ^throwing_strategy_selected {<t> <> nil} # verifico che l'agente abbia selezionato una strategia di posizionamento dalla quale colpire la finestra
+                ^combining_strategy_selected {<c> <> nil} # verifico che l'agente abbia selezionato una certa strategia di oggetti
+                ^position_strategy <ps>
+                ^throwing_strategy <ts>
+                ^combining_strategy <cs>)
+    
+    (<ps> ^name <p> ^reward <rp> ) # prendo il reward associato alla posizione della finestra da colpire (scelta dall'agente)
+    (<ts> ^name <t> ^reward <rt> ^print_command <print_ts>) # prendo il reward associato alla posizione dalla quale l'agente ha deciso di colpire la finestra
+    (<cs> ^name <c> ^reward <rc> ^print_command <print_cs>) # prendo il reward associato alla strategia di combinazione degli oggetti (scelta dall'agente)
+--> 
+    (<agent>  ^action <action> - define-update +) # aggiorno la fase in cui si troverà l'agente che sarà chiamata "define-update"
+    
+    # aggiornamento punti vita della finestra (considerando i rewards associati alle 3 componenti prese nell'antecedente) seguendo la seguente formula:
+    # calcolo score del danno inflitto alla finestra: (5 * strategia_combinazione_oggetti + 5 * posizione_dalla_quale_agente_lancia + 10 * punto_finestra_da_colpire)
+    (<window> ^has_life_points <points> - (- <points> (max 1 (+ (+ (* 5 <rc>) (* 5 <rt>)) (* 10 <rp>))) ) )
+
+    (write (crlf) |EVENTO ------------------------------------------------------ LANCIO ALLA FINESTRA|)
+    (write (crlf) |EVENTO                                                        DANNO: |  (max 1 (+ (+ (* 5 <rc>) (* 5 <rt>)) (* 10 <rp>))) )
+    (write (crlf) |EVENTO                                                        RICOMPENSA DI" 10 * | <rp> |" PER LA  PARTE DI FINESTRA COLPITA:    | <p>)
+    (write (crlf) |EVENTO                                                        RICOMPENSA DI " 5 * | <rt> |" PER LA POSIZIONE DA CUI HA LANCIATO:  | <print_ts>)
+    (write (crlf) |EVENTO                                                        RICOMPENSA DI " 5 * | <rc> |" PER LA STRATEGIA DI COMBINAZIONE DEGLI OGGETTI:     | <c> | (| <print_cs> |)|)
+    (write (crlf))
+}
+
+
+#pROPONGO L'OPERATORE UPDATE OBJECT E QUANDO L'APPLICO DICO CHE HO PERSO GLI OGGETTI E LI POSIZIONO IN POSIZIONE RANDOM PREPARANDO 
+#IL CAMPO PER UN ITERAZIONE SUCCESSIVA TRAMITE ANCHE L'ATTRIBUTO ACTION CHE VA A RESTART CHE FA ATTIVARE 
+#SIA ESCAPE CHE RESTART 
+
+# La regola qui sotto, PROPONE L'OPERATORE chiamato "define-update_pos_object_operator" che inserirà gli oggetti in 
+# posizioni RANDOM preparando il terreno per un'iterazione successiva TRAMITE L'ATTRIBUTO "action" di <agent> che permetterà
+# di attivare sia la fase di RESTART CHE DI ESCAPE
+sp {propose*update*objects 
+    (state <s>      ^name escape_room
+                    ^has_agent <agent>)
+    (<agent>        ^action define-update)
+-->
+    (<s> ^operator <o>) # propongo un nuovo operatore
+    (<o> ^name define-update_pos_object_operator) # propongo l'operatore chiamato "define-update_pos_object_operator"
+}
+
+
+sp {apply*update*objects
+    (state <s>      ^name escape_room
+                    ^has_agent <agent>
+                    ^has_env <env>
+                    ^operator <o>)
+
+    (<o> ^name define-update_pos_object_operator) # verifico che sia stato proposto questo operatore
+
+    (<agent>    ^action <action> ^has_object {<ob> <> nil}) # verifico che l'agente abbia degli oggetti in mano
+    (<env> ^has_object <env_object>)
+    (<env_object> ^name <ob> ^is_in_position <pos_obj>) # con <pos_obj> prendo la posizione degli oggetti che ha in mano l'agente
+-->
+    (<agent>  ^action <action> - restart +) # SETTO LA PROSSIMA FASE che sarà "restart"
+    (<agent> ^has_object <ob> - nil +) # AGGIORNO IL FATTO CHE L'AGENTE NON AVRA' PIU' NESSUN OGGETTO IN MANO
+    (<env_object> ^is_in_position <pos_obj> - (+ (rand-int 4) 1) +) # genero casualmente la posizione nelle quali gli oggetti che aveva in mano l'agente verranno inserite
+    
+    (write (crlf) |INFO                                                         L'AGENTE PERDE : | <ob>)
+    (write (crlf)) 
+}
+
+
+
+
+# Propongo L'OPERATORE ESCAPE: 
+sp {propose*escape
+   (state <s>    ^name escape_room
+                 ^has_agent <agent>
+                 ^has_env <env>)
+
+    (<agent>    ^action restart) # verifico di trovarmi nella fase "restart"
+    (<env>      ^has_object <window>)
+    (<window>   ^name window ^has_life_points {<points> <= 0}) # L'OPERATORE "execute-escape" VERRA' PROPOSTO SOLAMENTE SE LA FINESTRA NON HA PIU' PUNTI VITA (<0)
+-->
+    (<s> ^operator <o>)
+    (<o> ^name execute-escape) # nome nuovo operatore proposto
+}
+
+# Se applicato, l'operatore "escape" FARA' TERMINARE L'ESECUZIONE DELL'AGENTE:
+sp {apply*escape
+     (state <s>  ^name escape_room
+                 ^has_agent <agent>
+                 ^has_total_round <round>
+                 ^operator <o>)
+
+    (<o> ^name execute-escape) # verifico che sia stato proposto l'operatore "execute-escape"
+    (<agent>  ^action <action> ^name <name>)
+-->
+    (<agent> ^action <action> - finish +) # aggiorno la nuova fase che sarà la "finish"
+    (write (crlf) |EVENTO ------------------------------------------------------ Agent E| <name> | è scappato !!! |)
+    (write (crlf) |EVENT ------------------------------------------------------ AgentE | <name> | CI HA MESSO | <round> | ROUND PER SCAPPARE!|)
+    (write (crlf))
+    (halt)
+}
+
+
+
+# ALTRIMENTI, SE FALLISCO L'ESCAPE (perchè la finestra non è stata ancora rotta),
+# ALLORA L'AGENTE RICOMINCIA L'ESECUZIONE PARTENDO PERO' DALLA POSIZIONE IN CUI SI TROVA IN QUESTO MOMENTO:
+sp {propose*restart
+    (state <s>  ^name escape_room
+                 ^has_agent <agent>
+                 ^has_env <env>)
+
+    (<agent>    ^action restart)
+    (<env>      ^has_object <window>)
+    (<window>   ^name window ^has_life_points {<points> > 0}) # L'OPERATORE "restart_operator" VERRA' PROPOSTO SOLAMENTE SE LA FINESTRA HA ANCORA PUNTI VITA (>0)
+-->
+    (<s> ^operator <o>)
+    (<o> ^name restart_operator) # nome nuovo operatore proposto
+}
+
+
+sp {apply*restart
+     (state <s>  ^name escape_room
+                 ^has_agent <agent>
+                 ^has_total_round <round> # con <round> prendo il numero totale di round eseguiti fino ad ora
+                 ^operator <o>)
+
+    (<o> ^name restart_operator) # verifico che sia stato proposto l'operatore chiamato "restart_operator"
+    (<agent>    ^action <action>)
+-->
+    (<s> ^has_total_round <round> - (+ <round> 1) +) # incremento di 1 il numero di round eseguiti fino ad ora
+    (<agent> ^action <action> - start +) # aggiorno la nuova fase che sarà di nuovo la "start"
+    (write (crlf))
+    (write (crlf) |EVENTO ------------------------------------------------------ LA FINESTRA è ANCORA INTEGRA........ RITENTA|)
+    (write (crlf) (crlf) (crlf) (crlf) (crlf) (crlf) (crlf) (crlf))
+    (write (crlf) | ------------------------------------------------------ NUOVO TENTATIVO ------------------------------------------------------|)
+    (wait 1000)
+}
